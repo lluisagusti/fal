@@ -4,14 +4,14 @@ import hashlib
 import shutil
 import subprocess
 from functools import lru_cache
-from pathlib import Path
+from pathlib import Path, PurePath
 from tempfile import TemporaryDirectory
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from fal.toolkit.mainify import mainify
 
-FAL_PERSISTENT_DIR = Path("/data")
+FAL_PERSISTENT_DIR = PurePath("/data")
 FAL_REPOSITORY_DIR = FAL_PERSISTENT_DIR / ".fal" / "repos"
 FAL_MODEL_WEIGHTS_DIR = FAL_PERSISTENT_DIR / ".fal" / "model_weights"
 
@@ -71,8 +71,13 @@ def _get_remote_file_properties(url: str) -> tuple[str, int]:
         content_length = int(response.headers.get("Content-Length", -1))
 
     if not file_name:
-        url_path = urlparse(url).path
-        file_name = Path(url_path).name or _hash_url(url)
+        parsed_url = urlparse(url)
+
+        if parsed_url.scheme == "data":
+            file_name = _hash_url(url)
+        else:
+            url_path = parsed_url.path
+            file_name = Path(url_path).name or _hash_url(url)
 
     return file_name, content_length
 
@@ -148,7 +153,7 @@ def download_file(
 
     # If target_dir is not an absolute path, use "/data" as the relative directory
     if not target_dir_path.is_absolute():
-        target_dir_path = FAL_PERSISTENT_DIR / target_dir_path
+        target_dir_path = FAL_PERSISTENT_DIR / target_dir_path  # type: ignore[assignment]
 
     target_path = target_dir_path.resolve() / file_name
 
@@ -338,16 +343,26 @@ def clone_repository(
     Returns:
         A Path object representing the full path to the cloned Git repository.
     """
-    target_dir = target_dir or FAL_REPOSITORY_DIR
+    target_dir = target_dir or FAL_REPOSITORY_DIR  # type: ignore[assignment]
     repo_name = repo_name or Path(https_url).stem
 
-    local_repo_path = Path(target_dir) / repo_name
+    local_repo_path = Path(target_dir) / repo_name  # type: ignore[arg-type]
 
     if local_repo_path.exists():
         local_repo_commit_hash = _get_git_revision_hash(local_repo_path)
         if local_repo_commit_hash == commit_hash and not force:
             return local_repo_path
         else:
+            if local_repo_commit_hash != commit_hash:
+                print(
+                    f"Local repository '{local_repo_path}' has a different commit hash "
+                    f"({local_repo_commit_hash}) than the one provided ({commit_hash})."
+                )
+            elif force:
+                print(
+                    f"Local repository '{local_repo_path}' already exists. "
+                    f"Forcing re-download."
+                )
             print(f"Removing the existing repository: {local_repo_path} ")
             shutil.rmtree(local_repo_path)
 
@@ -362,6 +377,7 @@ def clone_repository(
         clone_command = [
             "git",
             "clone",
+            "--recursive",
             https_url,
             temp_dir_path,
         ]
@@ -387,6 +403,19 @@ def clone_repository(
 def _get_git_revision_hash(repo_path: Path) -> str:
     import subprocess
 
-    return subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=repo_path, text=True
-    ).strip()
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_path,
+            text=True,
+            stderr=subprocess.STDOUT,
+        ).strip()
+    except subprocess.CalledProcessError as error:
+        if "not a git repository" in error.output:
+            print(f"Repository '{repo_path}' is not a git repository.")
+            return ""
+
+        print(
+            f"{error}\nFailed to get the commit hash of the repository '{repo_path}' ."
+        )
+        raise error

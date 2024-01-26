@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import click
 import fal.auth as auth
-import grpc
+import fal
 from fal import api, sdk
 from fal.console import console
 from fal.exceptions import ApplicationExceptionHandler
@@ -145,15 +145,6 @@ def auth_cli():
 @auth_cli.command(name="login")
 def auth_login():
     auth.login()
-    try:
-        client = sdk.FalServerlessClient(f"{DEFAULT_HOST}:{DEFAULT_PORT}")
-        with client.connect() as connection:
-            connection.list_aliases()
-    except grpc.RpcError as e:
-        if "Insufficient permissions" in e.details():
-            console.print(e.details())
-        else:
-            raise e
 
 
 @auth_cli.command(name="logout")
@@ -244,6 +235,28 @@ def function_cli(ctx, host: str, port: str):
     ctx.obj = api.FalServerlessHost(f"{host}:{port}")
 
 
+def load_function_from(
+    host: api.FalServerlessHost,
+    file_path: str,
+    function_name: str,
+) -> api.IsolatedFunction:
+    import runpy
+
+    module = runpy.run_path(file_path)
+    if function_name not in module:
+        raise api.FalServerlessError(f"Function '{function_name}' not found in module")
+
+    target = module[function_name]
+    if isinstance(target, type) and issubclass(target, fal.App):
+        target = fal.wrap_app(target, host=host)
+
+    if not isinstance(target, api.IsolatedFunction):
+        raise api.FalServerlessError(
+            f"Function '{function_name}' is not a fal.function or a fal.App"
+        )
+    return target
+
+
 @function_cli.command("serve")
 @click.option("--alias", default=None)
 @click.option(
@@ -262,15 +275,9 @@ def register_application(
     alias: str | None,
     auth_mode: ALIAS_AUTH_TYPE,
 ):
-    import runpy
-
     user_id = _get_user_id()
 
-    module = runpy.run_path(file_path)
-    if function_name not in module:
-        raise api.FalServerlessError(f"Function '{function_name}' not found in module")
-
-    isolated_function: api.IsolatedFunction = module[function_name]
+    isolated_function = load_function_from(host, file_path, function_name)
     gateway_options = isolated_function.options.gateway
     if "serve" not in gateway_options and "exposed_port" not in gateway_options:
         raise api.FalServerlessError(
@@ -289,22 +296,32 @@ def register_application(
         options=isolated_function.options,
         application_name=alias,
         application_auth_mode=auth_mode,
-        metadata={},
+        metadata=isolated_function.options.host.get("metadata", {}),
     )
 
     if id:
-        # TODO: should we centralize this URL format?
-        gateway_host = host.url.replace("api.", "gateway.")
-        gateway_host = remove_http_and_port_from_url(gateway_host)
+        gateway_host = remove_http_and_port_from_url(host.url)
+        gateway_host = (
+            gateway_host.replace("api.", "").replace("alpha.", "").replace("ai", "run")
+        )
 
         if alias:
             console.print(
                 f"Registered a new revision for function '{alias}' (revision='{id}')."
             )
-            console.print(f"URL: https://{user_id}-{alias}.{gateway_host}")
+            console.print(f"URL: https://{gateway_host}/{user_id}/{alias}")
         else:
             console.print(f"Registered anonymous function '{id}'.")
-            console.print(f"URL: https://{user_id}-{id}.{gateway_host}")
+            console.print(f"URL: https://{gateway_host}/{user_id}/{id}")
+
+
+@function_cli.command("run")
+@click.argument("file_path", required=True)
+@click.argument("function_name", required=True)
+@click.pass_obj
+def run(host: api.FalServerlessHost, file_path: str, function_name: str):
+    isolated_function = load_function_from(host, file_path, function_name)
+    isolated_function()
 
 
 @function_cli.command("logs")
@@ -349,18 +366,22 @@ def _alias_table(aliases: list[AliasInfo]):
     table.add_column("Alias")
     table.add_column("Revision")
     table.add_column("Auth")
+    table.add_column("Min Concurrency")
     table.add_column("Max Concurrency")
     table.add_column("Max Multiplexing")
     table.add_column("Keep Alive")
+    table.add_column("Active Workers")
 
     for app_alias in aliases:
         table.add_row(
             app_alias.alias,
             app_alias.revision,
             app_alias.auth_mode,
+            str(app_alias.min_concurrency),
             str(app_alias.max_concurrency),
             str(app_alias.max_multiplexing),
             str(app_alias.keep_alive),
+            str(app_alias.active_runners),
         )
 
     return table
@@ -411,6 +432,7 @@ def alias_list(client: api.FalServerlessClient):
 @click.option("--keep-alive", "-k", type=int)
 @click.option("--max-multiplexing", "-m", type=int)
 @click.option("--max-concurrency", "-c", type=int)
+@click.option("--min-concurrency", type=int)
 # TODO: add auth_mode
 # @click.option(
 #     "--auth",
@@ -424,9 +446,15 @@ def alias_update(
     keep_alive: int | None,
     max_multiplexing: int | None,
     max_concurrency: int | None,
+    min_concurrency: int | None,
 ):
     with client.connect() as connection:
-        if keep_alive is None and max_multiplexing is None and max_concurrency is None:
+        if (
+            keep_alive is None
+            and max_multiplexing is None
+            and max_concurrency is None
+            and min_concurrency is None
+        ):
             console.log("No parameters for update were provided, ignoring.")
             return
 
@@ -435,8 +463,36 @@ def alias_update(
             keep_alive=keep_alive,
             max_multiplexing=max_multiplexing,
             max_concurrency=max_concurrency,
+            min_concurrency=min_concurrency,
         )
         table = _alias_table([alias_info])
+
+    console.print(table)
+
+
+@alias_cli.command("runners")
+@click.argument("alias", required=True)
+@click.pass_obj
+def alias_list_runners(
+    client: api.FalServerlessClient,
+    alias: str,
+):
+    with client.connect() as connection:
+        runners = connection.list_alias_runners(alias=alias)
+
+    table = Table(title="Application Runners")
+    table.add_column("Runner ID")
+    table.add_column("In Flight Requests")
+    table.add_column("Expires in")
+
+    for runner in runners:
+        table.add_row(
+            runner.runner_id,
+            str(runner.in_flight_requests),
+            "N/A (active)"
+            if not runner.expiration_countdown
+            else f"{runner.expiration_countdown}s",
+        )
 
     console.print(table)
 
@@ -518,30 +574,6 @@ def remove_http_and_port_from_url(url):
         url = url_parts[0]
 
     return url
-
-
-# dbt-fal commands to be errored out
-DBT_FAL_COMMAND_NOTICE = """
-The dbt tool `fal` and `dbt-fal` adapter have been merged into a single tool.
-Please use the new `dbt-fal` command line tool instead.
-Running `pip install dbt-fal` will install the new tool and the adapter alongside.
-Then run your command like
-
-    dbt-fal <command>
-
-"""
-
-
-@cli.command("run", context_settings={"ignore_unknown_options": True})
-@click.argument("any", nargs=-1, type=click.UNPROCESSED)
-def dbt_run(any):
-    raise click.BadArgumentUsage(DBT_FAL_COMMAND_NOTICE)
-
-
-@cli.command("flow", context_settings={"ignore_unknown_options": True})
-@click.argument("any", nargs=-1, type=click.UNPROCESSED)
-def dbt_flow(any):
-    raise click.BadArgumentUsage(DBT_FAL_COMMAND_NOTICE)
 
 
 def _get_user_id() -> str:

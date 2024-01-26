@@ -32,6 +32,7 @@ from fal.logging.isolate import IsolateLogPrinter
 from fal.sdk import (
     FAL_SERVERLESS_DEFAULT_KEEP_ALIVE,
     FAL_SERVERLESS_DEFAULT_MAX_MULTIPLEXING,
+    FAL_SERVERLESS_DEFAULT_MIN_CONCURRENCY,
     Credentials,
     FalServerlessClient,
     FalServerlessConnection,
@@ -309,6 +310,7 @@ class FalServerlessHost(Host):
             "machine_type",
             "keep_alive",
             "max_concurrency",
+            "min_concurrency",
             "max_multiplexing",
             "setup_function",
             "metadata",
@@ -352,6 +354,7 @@ class FalServerlessHost(Host):
         )
         keep_alive = options.host.get("keep_alive", FAL_SERVERLESS_DEFAULT_KEEP_ALIVE)
         max_concurrency = options.host.get("max_concurrency")
+        min_concurrency = options.host.get("min_concurrency")
         max_multiplexing = options.host.get("max_multiplexing")
         base_image = options.host.get("_base_image", None)
         scheduler = options.host.get("_scheduler", None)
@@ -367,6 +370,7 @@ class FalServerlessHost(Host):
             scheduler_options=scheduler_options,
             max_multiplexing=max_multiplexing,
             max_concurrency=max_concurrency,
+            min_concurrency=min_concurrency,
         )
 
         partial_func = _prepare_partial_func(func)
@@ -416,6 +420,7 @@ class FalServerlessHost(Host):
         )
         keep_alive = options.host.get("keep_alive", FAL_SERVERLESS_DEFAULT_KEEP_ALIVE)
         max_concurrency = options.host.get("max_concurrency")
+        min_concurrency = options.host.get("min_concurrency")
         max_multiplexing = options.host.get("max_multiplexing")
         base_image = options.host.get("_base_image", None)
         scheduler = options.host.get("_scheduler", None)
@@ -432,6 +437,7 @@ class FalServerlessHost(Host):
             scheduler_options=scheduler_options,
             max_multiplexing=max_multiplexing,
             max_concurrency=max_concurrency,
+            min_concurrency=min_concurrency,
         )
 
         return_value = _UNSET
@@ -552,9 +558,11 @@ def function(
     exposed_port: int | None = None,
     max_concurrency: int | None = None,
     # FalServerlessHost options
+    metadata: dict[str, Any] | None = None,
     machine_type: str = FAL_SERVERLESS_DEFAULT_MACHINE_TYPE,
     keep_alive: int = FAL_SERVERLESS_DEFAULT_KEEP_ALIVE,
     max_multiplexing: int = FAL_SERVERLESS_DEFAULT_MAX_MULTIPLEXING,
+    min_concurrency: int = FAL_SERVERLESS_DEFAULT_MIN_CONCURRENCY,
     setup_function: Callable[..., None] | None = None,
     _base_image: str | None = None,
     _scheduler: str | None = None,
@@ -576,9 +584,11 @@ def function(
     exposed_port: int | None = None,
     max_concurrency: int | None = None,
     # FalServerlessHost options
+    metadata: dict[str, Any] | None = None,
     machine_type: str = FAL_SERVERLESS_DEFAULT_MACHINE_TYPE,
     keep_alive: int = FAL_SERVERLESS_DEFAULT_KEEP_ALIVE,
     max_multiplexing: int = FAL_SERVERLESS_DEFAULT_MAX_MULTIPLEXING,
+    min_concurrency: int = FAL_SERVERLESS_DEFAULT_MIN_CONCURRENCY,
     setup_function: Callable[..., None] | None = None,
     _base_image: str | None = None,
     _scheduler: str | None = None,
@@ -652,9 +662,11 @@ def function(
     exposed_port: int | None = None,
     max_concurrency: int | None = None,
     # FalServerlessHost options
+    metadata: dict[str, Any] | None = None,
     machine_type: str = FAL_SERVERLESS_DEFAULT_MACHINE_TYPE,
     keep_alive: int = FAL_SERVERLESS_DEFAULT_KEEP_ALIVE,
     max_multiplexing: int = FAL_SERVERLESS_DEFAULT_MAX_MULTIPLEXING,
+    min_concurrency: int = FAL_SERVERLESS_DEFAULT_MIN_CONCURRENCY,
     setup_function: Callable[..., None] | None = None,
     _base_image: str | None = None,
     _scheduler: str | None = None,
@@ -681,9 +693,11 @@ def function(
     exposed_port: int | None = None,
     max_concurrency: int | None = None,
     # FalServerlessHost options
+    metadata: dict[str, Any] | None = None,
     machine_type: str = FAL_SERVERLESS_DEFAULT_MACHINE_TYPE,
     keep_alive: int = FAL_SERVERLESS_DEFAULT_KEEP_ALIVE,
     max_multiplexing: int = FAL_SERVERLESS_DEFAULT_MAX_MULTIPLEXING,
+    min_concurrency: int = FAL_SERVERLESS_DEFAULT_MIN_CONCURRENCY,
     setup_function: Callable[..., None] | None = None,
     _base_image: str | None = None,
     _scheduler: str | None = None,
@@ -788,7 +802,7 @@ class ServeWrapper:
             if "properties" in schema:
                 mark_order(schema, "properties")
 
-        for key in spec["components"].get("schemas") or {}:
+        for key in spec.get("components", {}).get("schemas") or {}:
             order_schema_object(spec["components"]["schemas"][key])
 
         return spec
