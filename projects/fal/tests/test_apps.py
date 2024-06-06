@@ -1,4 +1,5 @@
 import secrets
+import subprocess
 import time
 from contextlib import contextmanager
 from typing import Generator
@@ -13,9 +14,9 @@ from fal.rest_client import REST_CLIENT
 from fal.workflows import Workflow
 from fastapi import WebSocket
 from httpx import HTTPStatusError
+from isolate.backends.common import active_python
 from openapi_fal_rest.api.applications import app_metadata
 from pydantic import BaseModel
-from isolate.backends.common import active_python
 from pydantic import __version__ as pydantic_version
 
 
@@ -34,6 +35,13 @@ class Output(BaseModel):
 
 
 actual_python = active_python()
+
+def git_revision_short_hash() -> str:
+    return (
+        subprocess.check_output(["git", "rev-parse", "--short", "HEAD"])
+        .decode("ascii")
+        .strip()
+    )
 
 @fal.function(
     keep_alive=60,
@@ -55,7 +63,9 @@ nomad_addition_app = addition_app.on(_scheduler="nomad")
 
 @fal.function(
     kind="container",
-    image=ContainerImage.from_dockerfile_str(f"FROM python:{actual_python}-slim"),
+    image=ContainerImage.from_dockerfile_str(
+        f"FROM python:{actual_python}-slim\n# {git_revision_short_hash()}",
+    ),
     keep_alive=60,
     machine_type="S",
     serve=True,

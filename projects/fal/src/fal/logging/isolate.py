@@ -17,7 +17,8 @@ class IsolateLogPrinter:
     debug: bool
 
     def __init__(self, debug: bool = False) -> None:
-        self.debug = debug
+        # self.debug = debug
+        self.debug = True
 
     def print(self, log: Log):
         if log.level < LogLevel.INFO and not self.debug:
