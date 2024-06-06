@@ -15,6 +15,7 @@ from fastapi import WebSocket
 from httpx import HTTPStatusError
 from openapi_fal_rest.api.applications import app_metadata
 from pydantic import BaseModel
+from isolate.backends.common import active_python
 from pydantic import __version__ as pydantic_version
 
 
@@ -31,6 +32,8 @@ class StatefulInput(BaseModel):
 class Output(BaseModel):
     result: int
 
+
+actual_python = active_python()
 
 @fal.function(
     keep_alive=60,
@@ -52,7 +55,7 @@ nomad_addition_app = addition_app.on(_scheduler="nomad")
 
 @fal.function(
     kind="container",
-    image=ContainerImage.from_dockerfile_str("FROM python:3.11"),
+    image=ContainerImage.from_dockerfile_str(f"FROM python:{actual_python}-slim"),
     keep_alive=60,
     machine_type="S",
     serve=True,
